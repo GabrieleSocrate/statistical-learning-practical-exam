@@ -1,0 +1,353 @@
+---
+title: "Exam Solution"
+author: "Gabriele Socrate
+date: "2025-11-20"
+output: pdf_document
+---
+
+# Exercises
+
+## Exercise 1
+
+```{r}
+load("data_202511201120.RData")
+names(data.all)
+```
+```{r}
+num.cov = data.all[, -c(1, 3, 6, 7, 9, 11)] 
+num.cov.scaled = scale(num.cov)
+summary(num.cov.scaled)
+```
+```{r}
+set.seed(1120)
+km.res = kmeans(num.cov.scaled, centers = 4, nstart = 10)
+km.res$centers
+km.res$cluster
+J <- km.res$tot.withinss
+J
+```
+
+
+```{r}
+J.all = numeric(10)
+
+layout(matrix(1:10, nrow = 2, byrow = TRUE))
+for(k in 1:10){
+  set.seed(1120)
+  kmeans_res = kmeans(num.cov.scaled, centers = k, nstart = 10)
+  
+  plot(num.cov.scaled, pch = 16, cex = 1,
+       xlab = '', ylab = '', asp = 1,
+       col = kmeans_res$cluster,
+       main = paste("k =", k))
+  
+  J.all[k] = kmeans_res$tot.withinss
+}
+
+layout(1)
+plot(1:10, J.all, type = 'b', lwd = 3,
+     xlab = "k", ylab = "Loss J",
+     main = "Loss J vs Number of Clusters")
+
+
+```
+The plot of does not show a clear elbow point: the decrease in the loss is smooth and gradual for all values of k from 1 to 10.
+When inspecting the cluster plots, none of the solutions reveals well-separated or naturally distinguishable groups, and the partitions appear mostly arbitrary.
+For these reasons, the data do not seem to exhibit a meaningful cluster structure, and no particular value of k is clearly supported.
+
+Although the plot of J(k) does not show a clear elbow and the data do not seem to contain well-separated groups, if we are required to select a number of clusters with k>1, the most reasonable choice is k=2.
+The decrease in the loss function is largest when moving from k=1 to k=2, while further increases in k lead to smaller marginal reductions.
+The plot for k=2 shows a mild but visible separation into two groups, whereas higher values of k produce partitions that appear mostly arbitrary.
+Therefore, k=2 represents the most interpretable and justifiable clustering solution under the constraint k>1.
+
+```{r}
+set.seed(1120)
+km.final <- kmeans(num.cov.scaled, centers = 2, nstart = 10)
+
+plot(num.cov.scaled,
+     pch = 16, cex = 1,
+     col = km.final$cluster,
+     xlab = "", ylab = "",
+     main = "K-means with k = 2")
+
+```
+The algorithm assigns each observation to the cluster whose center (mean vector) is closest in Euclidean distance, so each group collects points that lie closer to one centroid than to the other.
+However, the two clusters strongly overlap, and no clear separation emerges. This is consistent with the behavior of the loss J(k), which does not display a clear elbow.
+So, the solution with k=2 should be seen just as a rough split of the data based on distance to the two centers, not as two real or clearly separated groups.
+## Exercise 2
+
+```{r}
+set.seed(1120)
+Y_cat = factor(ifelse(data.all$Y < 17,0,1))
+data.all.cat = data.all
+data.all.cat$Y = Y_cat
+n = dim(data.all)[1]
+select.train = sample(1:n,n*7/10)
+train.cat = data.all.cat[select.train,]
+test.cat = data.all.cat[-select.train,]
+summary(train.cat)
+
+```
+
+```{r}
+library(e1071)
+svm.model <- svm(
+  Y ~ . ,      
+  data   = train.cat,
+  kernel = "radial",
+  cost   = 10,
+  gamma  = 1,
+  scale = TRUE
+)
+
+
+pred.train <- predict(svm.model, newdata = train.cat)
+pred.test  <- predict(svm.model, newdata = test.cat)
+acc.train <- mean(pred.train == train.cat$Y)
+acc.test  <- mean(pred.test  == test.cat$Y)
+acc.train
+acc.test
+```
+
+```{r}
+library(caret)
+set.seed(1120)
+tune.radial = tune(
+  svm,
+  Y ~ .,
+  data   = train.cat,
+  kernel = "radial",
+  ranges = list(
+    cost  = c(0.1, 1, 10),
+    gamma = c(1, 2)
+  ),
+  scale = TRUE
+)
+
+summary(tune.radial)
+best.svm = tune.radial$best.model
+
+pred.svm = predict(best.svm, newdata = test.cat)
+confusionMatrix(pred.svm, test.cat$Y)
+```
+The best model is obtained with cost = 10 and gamma = 1, which achieves the lowest cross-validation error (≈ 0.278).
+On the test set, this SVM reaches an accuracy of about 71.4%, above the No Information Rate.
+Since the positive class is 0, the sensitivity is very high (0.95), meaning that most observations in class 0 are correctly classified. The specificity is much lower (0.40), showing that the model is less accurate in detecting class 1.
+
+```{r}
+library(ROCR)
+
+rocplot=function(pred, truth, ...){
+  predob = prediction(pred, truth)
+  perf = performance(predob , "tpr", "fpr") 
+  plot(perf ,...)
+  auc = performance(predob,"auc")
+  auc <- auc@y.values[[1]]
+  auc = signif(auc,4)
+  text(0.8,0,paste("AUC=",auc))
+}
+
+
+fitted.base.test = -attributes(
+  predict(svm.model, test.cat, decision.values = TRUE)
+)$decision.values
+
+rocplot(fitted.best.test, test.cat$Y,
+        main="ROC – Tuned SVM (test)")
+```
+The tuned SVM and the original SVM actually use the same hyperparameters (the tuning step confirms the initial choice), so their ROC curves and AUC are expected to be essentially the same.
+On the test set, the model achieves an AUC of 0.8156, indicating good discrimination between the two classes across thresholds.
+Overall, tuning the hyperparameters improves the model’s generalization ability and leads to a clear increase in predictive accuracy.
+## Exercise 3
+
+```{r}
+
+n = dim(data.all)[1]
+set.seed(1120)
+select.train = sample(1:n,n*7/10)
+train = data.all[select.train,]
+test = data.all[-select.train,]
+
+library(gam)
+gam.model <- gam(
+  Y ~  s(age, df = 3) +
+       s(baseline_sbp, df = 3) +
+       s(BMI, df = 3) +
+       s(salt_intake, df = 3) +
+       s(adherence, df = 3) +
+    sex + smoker + exercise_level + treatment + diabetes,
+  data = train
+)
+
+
+pred.train.gam <- predict(gam.model, newdata = train)
+pred.test.gam  <- predict(gam.model, newdata = test)
+mse.train <- mean((train$Y - pred.train.gam)^2)
+mse.test  <- mean((test$Y - pred.test.gam)^2)
+
+mse.train
+mse.test
+```
+```{r}
+gam.sum <- summary(gam.model)
+
+p <- nrow(gam.sum$parametric.anova) - 1
+p.values.par <- gam.sum$parametric.anova[1:p, 5]
+p.values.nonpar <- gam.sum$anova[, 3]
+
+p.values <- c(p.values.par, p.values.nonpar)
+
+holm.p.values <- p.adjust(p.values, method = "holm")
+
+plot(p.values, col = "black", pch = 19, ylim = c(0,1),
+     xlab = "Effect", ylab = "p-value", main="Raw vs Holm-adjusted p-values")
+
+points(holm.p.values, col = "blue", pch = 19)
+abline(v = p + 0.5, col = "red")    # separates linear vs smooth
+abline(h = 0.05, lty = 2)
+legend("topright", legend=c("Raw p-values", "Holm-adjusted"),
+       col=c("black","blue"), pch=19)
+
+```
+From the plot comparing raw and Holm-adjusted p-values, we observe that the Holm correction (controlling the Family-Wise Error Rate) makes the significance criterion more stringent, so fewer smooth terms remain significant at the 0.05 level.
+Several terms have small raw p-values, but after Holm adjustment only the strongest effects stay below the 0.05 threshold.
+Overall, this indicates that while the GAM initially suggests multiple potential nonlinear relationships, only the most statistically robust nonlinear effects are supported once multiple testing is taken into account.
+
+```{r}
+summary(gam.model)
+layout(matrix(1:8,nrow=2,byrow=TRUE))
+plot.Gam(gam.model , se=TRUE , col ="red",lwd=2)
+```
+As we can see from the smooth plots and from the ANOVA table for nonparametric effects, only age and salt_intake show a statistically significant non-linear effect (both have p < 0.05 in the nonparametric test). In contrast, the smooth terms for baseline_sbp, BMI, and adherence are not significantly non-linear (their nonparametric p-values are > 0.05), so their effects can be reasonably approximated as linear (or treated as weak/non-essential nonlinearities).
+
+From the parametric part of the model and the corresponding partial-effect plots, the categorical variables sex and exercise_level are not significant (p>0.05) and their partial effects largely overlap around zero. Smoker is also not significant at the 5% level (it is only borderline at the 10% level). On the other hand, treatment is clearly significant and shows a strong difference between Control and DrugB, and diabetes is significant as well, with a visible shift between levels.
+
+```{r}
+best.gam<- gam(
+  Y ~  s(age, df = 3) +
+       baseline_sbp +
+       BMI + 
+       s(salt_intake, df = 3) +
+       adherence +
+    treatment + diabetes,
+  data = train
+)
+
+
+pred.train.gam <- predict(best.gam, newdata = train)
+pred.test.gam  <- predict(best.gam, newdata = test)
+mse.train <- mean((train$Y - pred.train.gam)^2)
+mse.test  <- mean((test$Y - pred.test.gam)^2)
+
+mse.train
+mse.test
+summary(best.gam)
+layout(matrix(1:8,nrow=2,byrow=TRUE))
+plot.Gam(best.gam , se=TRUE , col ="red",lwd=2)
+```
+Age shows a clear nonlinear decreasing effect: younger patients experience a larger reduction in systolic pressure, while the improvement becomes progressively smaller with increasing age, so older patients benefit less.
+Salt intake has a nonlinear effect that is relatively stable at low–moderate levels and decreases only for very high daily salt consumption, suggesting that excessive salt intake reduces the effectiveness of the treatment.
+
+In contrast, baseline_sbp, BMI, and adherence have significant linear effects in the final model (all with p < 0.05), while their nonlinear components are not significant, so a linear specification is appropriate for these covariates.
+Treatment group plays an important role: patients in the control arm achieve the smallest reduction, whereas DrugB shows a clearly larger reduction in systolic pressure.
+Finally, diabetes has a negative impact on the outcome: diabetic patients tend to experience a lower reduction in systolic blood pressure compared to non-diabetic individuals.
+
+
+## Exercise 4
+
+```{r}
+set.seed(1120)
+library(gbm)
+boost.model = gbm(
+  Y ~ .,
+  data             = train,
+  distribution     = "gaussian",
+  n.trees          = 5000,
+  interaction.depth = 4,
+  shrinkage        = 0.01
+)
+
+summary(boost.model)   
+yhat.train = predict(boost.model, newdata = train, n.trees = 5000)
+MSE.train  = mean((train$Y - yhat.train)^2)
+
+yhat.test = predict(boost.model, newdata = test, n.trees = 5000)
+MSE.test  = mean((test$Y - yhat.test)^2)
+
+MSE.train
+MSE.test
+```
+```{r}
+d.explore = 1:7
+params = data.frame(d = d.explore)   
+
+
+set.seed(1120)
+indexes = sample(1:2, size = nrow(train), replace = TRUE, prob = c(0.8, 0.2))
+subtrain = train[indexes == 1, ]
+subtest  = train[indexes == 2, ]
+
+MSE = numeric(nrow(params))
+
+for(ii in 1:nrow(params)){
+  model.boost = gbm(
+    Y ~ ., 
+    data = subtrain,
+    distribution = "gaussian",
+    n.trees = 5000,          
+    interaction.depth = params$d[ii],
+    shrinkage = 0.01,         
+    verbose = FALSE
+  )
+  
+  pred = predict(model.boost, newdata = subtest, n.trees = 5000)
+  
+  MSE[ii] = mean( (pred - subtest$Y)^2 )
+}
+
+opt.index  = which.min(MSE)
+opt.params = params[opt.index, ]
+opt.params  
+
+MSE_min = MSE[opt.index]
+MSE_min
+
+```
+By evaluating different values of the interaction depth d from 1 to 7 on an internal validation split, the smallest MSE is obtained for d=3.
+The interaction depth controls how many interaction effects the boosting model can capture: d=1 allows only additive (non-interacting) effects, larger values of d allow interactions between predictors.
+An optimal value of d=3 indicates that the model benefits from including up to third-order interactions, meaning that the relationship between the predictors and the response is not purely additive but involves meaningful combinations of multiple variables.
+
+
+The variable importance plot shows that age and salt intake are by far the most informative predictors, with relative influence values above 30%. These two covariates contribute the most to reducing prediction error,
+meaning that variation in blood-pressure reduction after 6 months is strongly driven by the patient’s age and daily salt consumption.
+Overall, the boosting model suggests that blood-pressure reduction is mainly associated with age and salt-intake patterns, while the remaining covariates contribute substantially less to the predictive performance.
+
+## Exercise 5
+```{r}
+lm.model = lm(Y ~ ., data = train)
+summary(lm.model)
+yhat.test = predict(lm.model, newdata = test)
+MSE.test.lm  = mean((test$Y - yhat.test)^2)
+
+MSE.test.lm
+```
+```{r}
+
+boost.model = gbm(
+  Y ~ .,
+  data             = train,
+  distribution     = "gaussian",
+  n.trees          = 5000,
+  interaction.depth = 3,
+  shrinkage        = 0.01
+)
+
+yhat.train = predict(boost.model, newdata = train, n.trees = 5000)
+MSE.train  = mean((train$Y - yhat.train)^2)
+yhat.test = predict(boost.model, newdata = test, n.trees = 5000)
+MSE.test  = mean((test$Y - yhat.test)^2)
+
+MSE.train
+MSE.test
+```
+Based on the test MSE values, the boosting model is clearly the best-performing one, with an error of about 34 compared to 111 for the linear model and 82 for the GAM. This indicates that the relationship between the covariates and the reduction in systolic blood pressure is not well captured by additive (as we saw before d = 3 not 1) or linear structures, while boosting successfully models the nonlinear effects and interactions in the data. The results show that age and salt intake are the strongest predictors of blood-pressure reduction, with BMI, adherence, and treatment also contributing but to a smaller extent. A further improvement could be obtained by tuning the number of trees used in the boosting model. In addition, the shrinkage parameter could also be tuned.
